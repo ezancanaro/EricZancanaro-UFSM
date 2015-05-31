@@ -12,12 +12,12 @@
 sem_t *pedidos, newRound, ca, cb, allServed, novo, servi, rodadaAtiva;
 //pedidos:   || newRoud: controla o início de uma nova rodada || ca: controla o índice da fila de clientes que precisam pedir
 //cb: Acesso ao indice da fila de clientes a serem atendidos || allServed: usado para definir se todos os garçoms serviram seus clientes
-//servi: controla a variável serviTodos, atualizada quando garçom termina de servir sua fila || ClientIDs: controla a ID individual do cliente || WaiterIDs: ID individual do garçom
+//servi: controla a variável serviTodos, atualizada quando garçom termina de servir sua fila ||
 bool fechouBar = false, existemClientesNoBar = true;
 int rodada,roundsTillNow, serviTodos;
 
 
-int idCliente,clientesPedidos;
+int idCliente,clientesPedidos,maxOrders,maxOrdersX;
 int indicePedClientes,indicePedGarcoms;
 
 volatile int *querTrago, *estadoClientes; //Fila de clientes que querem fazer o pedido..
@@ -32,30 +32,28 @@ int clients,waiters,C,rounds;
 void fazPedido(int id)
 {
 
-    //Já bebeu nesta rodada, nao pode fazer seu pedido ainda.
-    while(estadoClientes[id] == 1);
-
     sem_wait(&ca);
 
+    //Adiciona seu id na lista de clientes que querem fazer seu pedidio.
     querTrago[indicePedClientes] = id;
     indicePedClientes++;
-    if(indicePedClientes==clients)  // Implementação de uma lista circular com o vetor.
+    if(indicePedClientes==clients)  // Implementação de uma "lista circular" com o vetor.
         indicePedClientes = 0;
 
     sem_post(&ca);
-    printf("Cliente %d pediu trago..\n",id);
+    printf("Cliente %d quer trago..\n",id);
 
 
 
 }
 void esperaPedido(int id)
 {
+    //Espera o garçom liberar seu pedido
     sem_wait(&pedidos[id]);
 
 }
 void recebePedido(int id)
 {
-    estadoClientes[id]= 1; // Sinaliza que este cliente vai beber nesta rodada.
     printf("Cliente %d: 且ヽ(^O^*ヽ)   \n",id);
 
 }
@@ -80,7 +78,12 @@ void recebeMaximoPedidos(int *fila, int id)
 
         sem_wait(&cb); // Acesso ao indice do prox cliente a ser atendido.
 
-        if(querTrago[indicePedGarcoms] != -1)
+        if(maxOrders == clients){ // todos os clientes foram atendidos antes de preencher a fila de atendimento.
+            sem_post(&cb);
+            break;
+        }
+
+        if(querTrago[indicePedGarcoms] != -1 && estadoClientes[querTrago[indicePedGarcoms]] != 1)
         {
             //Armazena o indice que deve atender e atualiza o indice do próximo;
             i = indicePedGarcoms;
@@ -88,27 +91,31 @@ void recebeMaximoPedidos(int *fila, int id)
             if(indicePedGarcoms==clients)
                 indicePedGarcoms=0;
 
+            maxOrders++;//Variavel de controle de quantos clientes foram atendidos nesta rodada.
+
             sem_post(&cb); // Libera o indice para o atendimento do prox cliente.
 
             fila[aux] = querTrago[i]; //Coloca id do cliente na fila para atendimento.
+            estadoClientes[querTrago[i]] == 1; // Sinaliza que este cliente foi atendido nesta rodada.
             aux++;
             orders++;
             printf("Pedido do cliente %d anotado \n",querTrago[i]);
+
         }
         else
         {
-
             sem_post(&cb); //Libera o indice sem atender ninguem.
         }
+
 
     }
 
 }
 void registraPedidos(int id)
 {
-    printf("GARÇOM %d vai a copa registrar os pedidos.\n",id);
+    printf("\nGARÇOM %d vai a copa registrar os pedidos.\n\n",id);
     sleep(rand()%10);
-    printf("Pedidos registrados: %d \n", id);
+   // printf("Pedidos registrados: %d \n", id);
 }
 
 
@@ -127,8 +134,9 @@ void entregaPedidos(int *fila,int id)
     }
 
     sem_wait(&servi);
-    printf("\n %d Serviu todos\n",id);
+    printf("\n Garcom %d Serviu todos\n\n",id);
     serviTodos++;
+
     if(serviTodos == waiters) // Se todos os garçons terminaram de servir, libera allServed.
         sem_post(&allServed);
     sem_post(&servi);
@@ -147,7 +155,7 @@ void startFila(int *fila){
 void novaRodada()
 {
 
-    printf("\nNewRound\n\n");
+    //printf("\nNewRound\n\n");
     sem_wait(&allServed); // Espera os garçoms sinalizarem que serviram todos das suas filas.
 
     printf("\n\n PREPARANDO UMA NOVA RODADA! \n\n\n");
@@ -156,6 +164,7 @@ void novaRodada()
 
     printf("Direcionando os garçoms.\n");
     int i;
+    //Atualiza as filas de pedidos e os indices de inserçao nesta fila
     if(indicePedGarcoms==0)
     {
         for(i=0; i<clients; i++) //Todos os clientes foram servidos, atualiza lista de bebados.
@@ -178,13 +187,16 @@ void novaRodada()
     serviTodos = 0;
     sem_post(&servi);
 
-    sem_post(&ca);
-    sem_post(&cb);
 
+
+    //Verifica se foram realizadas todas as rodadas grátis da noite.
     printf("Conversando com o gerente. \n");
     roundsTillNow = rodada/waiters;
-
     if(roundsTillNow == rounds){
+        //limpa a lista de pedidos.
+        for(i = 0; i < clients; i++){
+            querTrago[i] = -1;
+        }
         printf("Acabaram as rodadas da casa.\n");
         fechouBar = true;
     }else{
@@ -193,8 +205,26 @@ void novaRodada()
         printf("\n\n");
     }
 
-    for(i=0; i<clients+waiters; i++)
-        sem_post(&newRound);
+    maxOrders = 0;
+
+    sem_post(&cb);
+    sem_post(&ca);
+
+    int total;
+    if((waiters * C) >= clients){
+        //Libera todos para o início de uma nova rodada.
+        total = clients+waiters;
+        for(i=0; i < total; i++)
+            sem_post(&newRound);
+    }else{
+        //Quando há mais clientes do que os garçoms podem atender.
+        //Alguns clientes ainda estão esperando pela bebida da primeira rodada.
+        total = (clients+waiters) -(clients-(waiters*C));
+        for(i=0; i<total; i++){
+            sem_post(&newRound);
+        }
+
+    }
 
 }
 
@@ -205,12 +235,12 @@ void *cliente(int id)
 {
     while (!fechouBar)
     {
-        //if(estadoClientes[id]!=1){
+
             fazPedido(id);
             esperaPedido(id);
             recebePedido(id);
             consomePedido(id); //tempo variavel
-        //}
+
         sem_wait(&newRound);
     }
 
@@ -239,9 +269,10 @@ void *garcom(int id)
         entregaPedidos(filaDePedidos,id);
         rodada++; // serve como param p/ fechar o bar
 
-        if(id == 0)
+        if(id == 0){
             novaRodada(); // Apenas um garçom precisa identificar o começo de um novo round.
 
+        }
         sem_wait(&newRound);
     }
 
@@ -274,6 +305,7 @@ void iniciaControleDoBar(){
     fechouBar = false;
     existemClientesNoBar = true;
 
+    maxOrders = 0;
     serviTodos = 0;
 }
 
